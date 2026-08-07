@@ -9,6 +9,9 @@ dotenv.config();
 let currentPosition = null;
 let lastProcessedCandle = null;
 
+let entryPrice = null;
+let trailingStop = null;
+
 async function getCandles() {
   const end = Math.floor(Date.now() / 1000);
   const start = end - (200 * 15 * 60);
@@ -71,6 +74,9 @@ async function run() {
       candle => Number(candle.close)
     );
 
+    const currentPrice =
+      closes[closes.length - 1];
+
     console.log(
       "Candles:",
       closes.length
@@ -78,10 +84,93 @@ async function run() {
 
     console.log(
       "Latest Close:",
-      closes[closes.length - 1]
+      currentPrice
     );
 
-    const signal = getSignal(closes);
+    // =========================
+    // TRAILING STOP MANAGEMENT
+    // =========================
+
+    if (
+      currentPosition === "LONG" &&
+      trailingStop !== null
+    ) {
+      trailingStop = Math.max(
+        trailingStop,
+        currentPrice - 5
+      );
+
+      console.log(
+        "LONG Trail:",
+        trailingStop
+      );
+
+      if (
+        currentPrice <= trailingStop
+      ) {
+        console.log(
+          "LONG STOP HIT"
+        );
+
+        const exit =
+          await placeMarketOrder(
+            "sell",
+            10
+          );
+
+        console.dir(exit, {
+          depth: null
+        });
+
+        currentPosition = null;
+        entryPrice = null;
+        trailingStop = null;
+
+        return;
+      }
+    }
+
+    if (
+      currentPosition === "SHORT" &&
+      trailingStop !== null
+    ) {
+      trailingStop = Math.min(
+        trailingStop,
+        currentPrice + 5
+      );
+
+      console.log(
+        "SHORT Trail:",
+        trailingStop
+      );
+
+      if (
+        currentPrice >= trailingStop
+      ) {
+        console.log(
+          "SHORT STOP HIT"
+        );
+
+        const exit =
+          await placeMarketOrder(
+            "buy",
+            10
+          );
+
+        console.dir(exit, {
+          depth: null
+        });
+
+        currentPosition = null;
+        entryPrice = null;
+        trailingStop = null;
+
+        return;
+      }
+    }
+
+    const signal =
+      getSignal(closes);
 
     console.log(
       "Signal:",
@@ -92,6 +181,10 @@ async function run() {
       "Current Position:",
       currentPosition
     );
+
+    // =========================
+    // BUY ENTRY
+    // =========================
 
     if (
       signal === "BUY" &&
@@ -112,7 +205,29 @@ async function run() {
       });
 
       currentPosition = "LONG";
+
+      entryPrice = Number(
+        result.result
+          .average_fill_price
+      );
+
+      trailingStop =
+        entryPrice - 15;
+
+      console.log(
+        "Entry:",
+        entryPrice
+      );
+
+      console.log(
+        "Initial SL:",
+        trailingStop
+      );
     }
+
+    // =========================
+    // SELL ENTRY
+    // =========================
 
     if (
       signal === "SELL" &&
@@ -133,6 +248,24 @@ async function run() {
       });
 
       currentPosition = "SHORT";
+
+      entryPrice = Number(
+        result.result
+          .average_fill_price
+      );
+
+      trailingStop =
+        entryPrice + 15;
+
+      console.log(
+        "Entry:",
+        entryPrice
+      );
+
+      console.log(
+        "Initial SL:",
+        trailingStop
+      );
     }
 
     console.log(

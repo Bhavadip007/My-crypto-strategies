@@ -115,7 +115,7 @@ async function run() {
         const exit =
           await placeMarketOrder(
             "sell",
-            10
+            20
           );
 
         console.dir(exit, {
@@ -154,7 +154,7 @@ async function run() {
         const exit =
           await placeMarketOrder(
             "buy",
-            10
+            20
           );
 
         console.dir(exit, {
@@ -197,7 +197,7 @@ async function run() {
       const result =
         await placeMarketOrder(
           "buy",
-          10
+          20
         );
 
       console.dir(result, {
@@ -240,7 +240,7 @@ async function run() {
       const result =
         await placeMarketOrder(
           "sell",
-          10
+          20
         );
 
       console.dir(result, {

@@ -10,7 +10,7 @@ export function getSignal(closes) {
 
   const hist = macd.map((v, i) => v - signal[i]);
 
-  const last = hist.length - 2;
+  const last = hist.length - 1;
 
   const prev = hist[last - 1];
   const curr = hist[last];

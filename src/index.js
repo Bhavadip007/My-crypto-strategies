@@ -4,20 +4,20 @@ import express from "express";
 const app = express();
 
 import { getSignal } from "./strategy.js";
-import { placeMarketOrder, placeStopLossOrder, getOpenPosition } from "./delta.js";
-import settingsRoutes
-from "../routes/settings.routes.js";
+import {
+  placeMarketOrder,
+  placeStopLossOrder,
+  getOpenPosition,
+} from "./delta.js";
+import settingsRoutes from "../routes/settings.routes.js";
+import { getBotSettings } from "../services/settings.service.js";
 import { connectDB } from "../config/db.js";
-
 
 dotenv.config();
 
 app.use(express.json());
 
-app.use(
-  "/api/settings",
-  settingsRoutes
-);
+app.use("/api/settings", settingsRoutes);
 
 await connectDB();
 
@@ -31,20 +31,25 @@ let lastProcessedCandle = null;
 let entryPrice = null;
 let trailingStop = null;
 
-const POSITION_SIZE = Number(
-  process.env.POSITION_SIZE || 10
-);
+async function getCandles(symbol, timeframe) {
+  const timeframeMap = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "1h": 3600,
+    "4h": 14400,
+  };
 
-async function getCandles() {
   const end = Math.floor(Date.now() / 1000);
-  const start = end - 200 * 15 * 60;
+  const start = end - 200 * timeframeMap[timeframe];
 
   const response = await axios.get(
     "https://api.india.delta.exchange/v2/history/candles",
     {
       params: {
-        symbol: "ETHUSD",
-        resolution: "15m",
+        symbol,
+        resolution: timeframe,
         start,
         end,
       },
@@ -58,7 +63,16 @@ async function getCandles() {
 
 async function run() {
   try {
-    const candles = await getCandles();
+    const settings = await getBotSettings();
+
+    console.log("Bot Settings:", settings);
+
+    if (!settings.botEnabled) {
+      console.log("Bot Disabled");
+      return;
+    }
+
+    const candles = await getCandles(settings.symbol, settings.timeframe);
 
     if (!candles.length) {
       console.log("No candles received");
@@ -94,14 +108,17 @@ async function run() {
     // =========================
 
     if (currentPosition === "LONG" && trailingStop !== null) {
-      trailingStop = Math.max(trailingStop, currentPrice - 5);
+      trailingStop = Math.max(
+        trailingStop,
+        currentPrice - settings.trailingStop,
+      );
 
       console.log("LONG Trail:", trailingStop);
 
       if (currentPrice <= trailingStop) {
         console.log("LONG STOP HIT");
 
-        const exit = await placeMarketOrder("sell", POSITION_SIZE);
+        const exit = await placeMarketOrder("sell", settings.lotSize);
 
         console.dir(exit, {
           depth: null,
@@ -116,14 +133,17 @@ async function run() {
     }
 
     if (currentPosition === "SHORT" && trailingStop !== null) {
-      trailingStop = Math.min(trailingStop, currentPrice + 5);
+      trailingStop = Math.min(
+        trailingStop,
+        currentPrice + settings.trailingStop,
+      );
 
       console.log("SHORT Trail:", trailingStop);
 
       if (currentPrice >= trailingStop) {
         console.log("SHORT STOP HIT");
 
-        const exit = await placeMarketOrder("buy", POSITION_SIZE);
+        const exit = await placeMarketOrder("buy", settings.lotSize);
 
         console.dir(exit, {
           depth: null,
@@ -150,7 +170,7 @@ async function run() {
     if (signal === "BUY" && currentPosition !== "LONG") {
       console.log("Opening LONG...");
 
-      const result = await placeMarketOrder("buy", POSITION_SIZE);
+      const result = await placeMarketOrder("buy", settings.lotSize);
 
       console.dir(result, {
         depth: null,
@@ -161,11 +181,11 @@ async function run() {
       entryPrice = Number(result.result.average_fill_price);
 
       // Native Delta SL
-      const stopPrice = entryPrice - 15;
+      const stopPrice = entryPrice - settings.stopLoss;
 
-      await placeStopLossOrder("sell", stopPrice, POSITION_SIZE);
+      await placeStopLossOrder("sell", stopPrice, settings.lotSize);
 
-      trailingStop = entryPrice - 15;
+      trailingStop = entryPrice - settings.stopLoss;
 
       console.log("Entry:", entryPrice);
 
@@ -181,7 +201,7 @@ async function run() {
     if (signal === "SELL" && currentPosition !== "SHORT") {
       console.log("Opening SHORT...");
 
-      const result = await placeMarketOrder("sell", POSITION_SIZE);
+      const result = await placeMarketOrder("sell", settings.lotSize);
 
       console.dir(result, {
         depth: null,
@@ -192,11 +212,11 @@ async function run() {
       entryPrice = Number(result.result.average_fill_price);
 
       // Native Delta SL
-      const stopPrice = entryPrice + 15;
+      const stopPrice = entryPrice + settings.stopLoss;
 
-      await placeStopLossOrder("buy", stopPrice, POSITION_SIZE);
+      await placeStopLossOrder("buy", stopPrice, settings.lotSize);
 
-      trailingStop = entryPrice + 15;
+      trailingStop = entryPrice + settings.stopLoss;
 
       console.log("Entry:", entryPrice);
 
@@ -223,22 +243,15 @@ async function run() {
 
 async function syncPosition() {
   try {
-    const response =
-      await getOpenPosition();
+    const response = await getOpenPosition();
 
     console.dir(response, {
-      depth: null
+      depth: null,
     });
-
   } catch (err) {
-    console.log(
-      "Position Sync Error"
-    );
+    console.log("Position Sync Error");
 
-    console.log(
-      err.response?.data ||
-      err.message
-    );
+    console.log(err.response?.data || err.message);
   }
 }
 

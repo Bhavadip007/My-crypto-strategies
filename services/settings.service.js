@@ -1,8 +1,11 @@
-import BotSettings
-from "../models/BotSettings.js";
+import BotSettings from "../models/BotSettings.js";
 
-export async function
-getBotSettings() {
+export async function getBotSettings() {
+  let settings = await BotSettings.findOne();
 
-  return await BotSettings.findOne();
+  if (!settings) {
+    settings = await BotSettings.create({});
+  }
+
+  return settings;
 }

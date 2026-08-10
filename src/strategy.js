@@ -15,13 +15,13 @@ export function getSignal(closes) {
   const prev = hist[last - 1];
   const curr = hist[last];
 
-  if (prev < 0 && curr > 0) {
-    return "BUY";
-  }
+  if (prev <= 0 && curr > 0) {
+  return "BUY";
+}
 
-  if (prev > 0 && curr < 0) {
-    return "SELL";
-  }
+if (prev >= 0 && curr < 0) {
+  return "SELL";
+}
 
   return "HOLD";
 }

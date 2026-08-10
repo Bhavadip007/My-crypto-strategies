@@ -29,7 +29,7 @@ app.listen(5000, () => {
 });
 
 let currentPosition = null;
-let lastProcessedCandle = null;
+let isProcessingOrder = false;
 
 let entryPrice = null;
 let trailingStop = null;
@@ -59,16 +59,17 @@ async function getCandles(symbol, timeframe) {
     },
   );
 
-  const candles = response.data.result.reverse();
+  const candles = response.data.result;
 
   return candles;
 }
 
 async function run() {
   try {
-    const settings = await getBotSettings();
 
-    console.log("Bot Settings:", settings);
+     await syncPosition();
+
+    const settings = await getBotSettings();
 
     if (!settings.botEnabled) {
       console.log("Bot Disabled");
@@ -82,29 +83,12 @@ async function run() {
       return;
     }
 
-    const latestCandle = candles[candles.length - 1];
-
-    if (latestCandle.time === lastProcessedCandle) {
-      console.log(new Date().toISOString(), "No new candle yet...");
-      return;
-    }
-
-    lastProcessedCandle = latestCandle.time;
-
     console.log("\n==============================");
-
-    console.log(
-      "New Candle:",
-      new Date(latestCandle.time * 1000).toISOString(),
-    );
 
     const closes = candles.map((candle) => Number(candle.close));
 
     const currentPrice = closes[closes.length - 1];
 
-    console.log("Candles:", closes.length);
-
-    console.log("Latest Close:", currentPrice);
 
     // =========================
     // TRAILING STOP MANAGEMENT
@@ -121,7 +105,7 @@ async function run() {
       if (currentPrice <= trailingStop) {
         console.log("LONG STOP HIT");
 
-        const exit = await placeMarketOrder("sell", settings.lotSize);
+        const exit = await placeMarketOrder("sell", settings.lotSize, settings.symbol);
 
         console.dir(exit, {
           depth: null,
@@ -146,7 +130,7 @@ async function run() {
       if (currentPrice >= trailingStop) {
         console.log("SHORT STOP HIT");
 
-        const exit = await placeMarketOrder("buy", settings.lotSize);
+        const exit = await placeMarketOrder("buy", settings.lotSize, settings.symbol);
 
         console.dir(exit, {
           depth: null,
@@ -162,71 +146,158 @@ async function run() {
 
     const signal = getSignal(closes);
 
-    console.log("Signal:", signal);
-
     console.log("Current Position:", currentPosition);
 
     // =========================
     // BUY ENTRY
     // =========================
 
-    if (signal === "BUY" && currentPosition !== "LONG") {
-      console.log("Opening LONG...");
+// =========================
+// BUY ENTRY
+// =========================
 
-      const result = await placeMarketOrder("buy", settings.lotSize);
+if (
+  signal === "BUY" &&
+  currentPosition !== "LONG" &&
+  !isProcessingOrder
+) {
+  isProcessingOrder = true;
 
-      console.dir(result, {
-        depth: null,
-      });
+  try {
+    // Close SHORT first
+    if (currentPosition === "SHORT") {
+      console.log("Closing SHORT...");
 
-      currentPosition = "LONG";
+      await placeMarketOrder(
+        "buy",
+        settings.lotSize,
+        settings.symbol
+      );
 
-      entryPrice = Number(result.result.average_fill_price);
+      currentPosition = null;
 
-      // Native Delta SL
-      const stopPrice = entryPrice - settings.stopLoss;
-
-      await placeStopLossOrder("sell", stopPrice, settings.lotSize);
-
-      trailingStop = entryPrice - settings.stopLoss;
-
-      console.log("Entry:", entryPrice);
-
-      console.log("Delta SL:", stopPrice);
-
-      console.log("Initial Trail:", trailingStop);
+      console.log("SHORT Closed");
     }
 
+    console.log("Opening LONG...");
+
+    const result = await placeMarketOrder(
+      "buy",
+      settings.lotSize,
+      settings.symbol
+    );
+
+    currentPosition = "LONG";
+
+    entryPrice = Number(
+      result.result.average_fill_price
+    );
+
+    const stopPrice =
+      entryPrice - settings.stopLoss;
+
+    try {
+      await placeStopLossOrder(
+        "sell",
+        stopPrice,
+        settings.lotSize,
+        settings.symbol
+      );
+
+      console.log(
+        "LONG Stop Loss Created:",
+        stopPrice
+      );
+    } catch (err) {
+      console.log(
+        "LONG SL Creation Failed"
+      );
+    }
+
+    trailingStop = stopPrice;
+
+    console.log("LONG ENTRY:", entryPrice);
+    console.log("LONG TRAIL:", trailingStop);
+
+  } finally {
+    isProcessingOrder = false;
+  }
+}
     // =========================
     // SELL ENTRY
     // =========================
 
-    if (signal === "SELL" && currentPosition !== "SHORT") {
-      console.log("Opening SHORT...");
+// =========================
+// SELL ENTRY
+// =========================
 
-      const result = await placeMarketOrder("sell", settings.lotSize);
+if (
+  signal === "SELL" &&
+  currentPosition !== "SHORT" &&
+  !isProcessingOrder
+) {
+  isProcessingOrder = true;
 
-      console.dir(result, {
-        depth: null,
-      });
+  try {
+    // Close LONG first
+    if (currentPosition === "LONG") {
+      console.log("Closing LONG...");
 
-      currentPosition = "SHORT";
+      await placeMarketOrder(
+        "sell",
+        settings.lotSize,
+        settings.symbol
+      );
 
-      entryPrice = Number(result.result.average_fill_price);
+      currentPosition = null;
 
-      // Native Delta SL
-      const stopPrice = entryPrice + settings.stopLoss;
-
-      await placeStopLossOrder("buy", stopPrice, settings.lotSize);
-
-      trailingStop = entryPrice + settings.stopLoss;
-
-      console.log("Entry:", entryPrice);
-
-      console.log("Delta SL:", stopPrice);
-
-      console.log("Initial Trail:", trailingStop);
+      console.log("LONG Closed");
     }
+
+    console.log("Opening SHORT...");
+
+    const result = await placeMarketOrder(
+      "sell",
+      settings.lotSize,
+      settings.symbol
+    );
+
+    currentPosition = "SHORT";
+
+    entryPrice = Number(
+      result.result.average_fill_price
+    );
+
+    const stopPrice =
+      entryPrice + settings.stopLoss;
+
+    try {
+      await placeStopLossOrder(
+        "buy",
+        stopPrice,
+        settings.lotSize,
+        settings.symbol
+      );
+
+      console.log(
+        "SHORT Stop Loss Created:",
+        stopPrice
+      );
+    } catch (err) {
+      console.log(
+        "SHORT SL Creation Failed"
+      );
+    }
+
+    trailingStop = stopPrice;
+
+    console.log("SHORT ENTRY:", entryPrice);
+    console.log("SHORT TRAIL:", trailingStop);
+
+  } finally {
+    isProcessingOrder = false;
+  }
+}
 
     console.log("==============================\n");
   } catch (err) {
@@ -248,24 +319,64 @@ async function syncPosition() {
   try {
     const response = await getOpenPosition();
 
-    console.dir(response, {
-      depth: null,
-    });
-  } catch (err) {
-    console.log("Position Sync Error");
+   const settings =
+  await getBotSettings();
 
-    console.log(err.response?.data || err.message);
+const position =
+  response.result?.find(
+    p =>
+      p.product_symbol === settings.symbol &&
+      Number(p.size) !== 0
+  );
+
+    if (!position) {
+  currentPosition = null;
+  entryPrice = null;
+  trailingStop = null;
+
+  return;
+}
+
+    currentPosition =
+  Number(position.size) > 0
+    ? "LONG"
+    : "SHORT";
+
+    entryPrice =
+  Number(position.entry_price);
+
+  if (trailingStop === null) {
+  trailingStop =
+    currentPosition === "LONG"
+      ? entryPrice - settings.stopLoss
+      : entryPrice + settings.stopLoss;
+}
+
+console.log(
+  "Synced Position:",
+  currentPosition
+);
+
+console.log(
+  "Entry Price:",
+  entryPrice
+);
+
+console.log(
+  "Trailing Stop:",
+  trailingStop
+);
+
+  } catch (err) {
+    console.log(err);
   }
 }
 
 async function start() {
   console.log("🚀 MACD Bhavadip Delta Bot Started");
-
-  await syncPosition();
-
+  setInterval(async () => {
   await run();
-
-  setInterval(run, 30 * 1000);
+}, 10 * 1000);
 }
 
 start();

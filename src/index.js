@@ -368,8 +368,8 @@ console.log(
 );
 
   } catch (err) {
-    console.log(err);
-  }
+  console.dir(err.response?.data, { depth: null });
+}
 }
 
 async function start() {

@@ -2,10 +2,13 @@ import express from "express";
 
 import {
   getSettings,
-  updateSettings
+  updateSettings,
+  getSymbols,
 } from "../controllers/settings.controller.js";
 
 const router = express.Router();
+
+router.get("/symbols", getSymbols);
 
 router.get("/", getSettings);
 

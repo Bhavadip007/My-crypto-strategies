@@ -4,12 +4,8 @@ import express from "express";
 import cors from "cors";
 const app = express();
 
-import { getSignal } from "./strategy.js";
-import {
-  placeMarketOrder,
-  placeStopLossOrder,
-  getOpenPosition,
-} from "./delta.js";
+import { getSignal, resetSignalState } from "./strategy.js";
+import { placeMarketOrder, getOpenPosition } from "./delta.js";
 import settingsRoutes from "../routes/settings.routes.js";
 import { getBotSettings } from "../services/settings.service.js";
 import { connectDB } from "../config/db.js";
@@ -29,10 +25,9 @@ app.listen(5000, () => {
 });
 
 let currentPosition = null;
+let lastExecutedSignal = null;
 let isProcessingOrder = false;
-
-let entryPrice = null;
-let trailingStop = null;
+let activeSymbol = null;
 
 async function getCandles(symbol, timeframe) {
   const timeframeMap = {
@@ -59,21 +54,38 @@ async function getCandles(symbol, timeframe) {
     },
   );
 
-  const candles = response.data.result;
+  const candles = (response.data.result || [])
+    .slice()
+    .sort((a, b) => a.time - b.time);
 
   return candles;
 }
 
 async function run() {
   try {
-
-     await syncPosition();
+    await syncPosition();
 
     const settings = await getBotSettings();
 
     if (!settings.botEnabled) {
       console.log("Bot Disabled");
       return;
+    }
+
+    if (isProcessingOrder) {
+      console.log("Order already in progress...");
+      return;
+    }
+
+    if (activeSymbol !== settings.symbol) {
+      console.log(
+        `Currency changed to ${settings.symbol}. New orders will use this pair from now.`,
+      );
+      resetSignalState();
+      lastExecutedSignal = null;
+      currentPosition = null;
+      activeSymbol = settings.symbol;
+      await syncPosition();
     }
 
     const candles = await getCandles(settings.symbol, settings.timeframe);
@@ -83,229 +95,98 @@ async function run() {
       return;
     }
 
-    console.log("\n==============================");
-
     const closes = candles.map((candle) => Number(candle.close));
-
-    const currentPrice = closes[closes.length - 1];
-
-
-    // =========================
-    // TRAILING STOP MANAGEMENT
-    // =========================
-
-    if (currentPosition === "LONG" && trailingStop !== null) {
-      trailingStop = Math.max(
-        trailingStop,
-        currentPrice - settings.trailingStop,
-      );
-
-      console.log("LONG Trail:", trailingStop);
-
-      if (currentPrice <= trailingStop) {
-        console.log("LONG STOP HIT");
-
-        const exit = await placeMarketOrder("sell", settings.lotSize, settings.symbol);
-
-        console.dir(exit, {
-          depth: null,
-        });
-
-        currentPosition = null;
-        entryPrice = null;
-        trailingStop = null;
-
-        return;
-      }
-    }
-
-    if (currentPosition === "SHORT" && trailingStop !== null) {
-      trailingStop = Math.min(
-        trailingStop,
-        currentPrice + settings.trailingStop,
-      );
-
-      console.log("SHORT Trail:", trailingStop);
-
-      if (currentPrice >= trailingStop) {
-        console.log("SHORT STOP HIT");
-
-        const exit = await placeMarketOrder("buy", settings.lotSize, settings.symbol);
-
-        console.dir(exit, {
-          depth: null,
-        });
-
-        currentPosition = null;
-        entryPrice = null;
-        trailingStop = null;
-
-        return;
-      }
-    }
-
     const signal = getSignal(closes);
 
+    console.log("\n==============================");
+    console.log("Time:", new Date().toISOString());
+    console.log("Symbol:", settings.symbol);
+    console.log("Latest Close:", closes[closes.length - 1]);
+    console.log("Signal:", signal);
     console.log("Current Position:", currentPosition);
+    console.log("Last Executed Signal:", lastExecutedSignal);
 
-    // =========================
-    // BUY ENTRY
-    // =========================
-
-// =========================
-// BUY ENTRY
-// =========================
-
-if (
-  signal === "BUY" &&
-  currentPosition !== "LONG" &&
-  !isProcessingOrder
-) {
-  isProcessingOrder = true;
-
-  try {
-    // Close SHORT first
-    if (currentPosition === "SHORT") {
-      console.log("Closing SHORT...");
-
-      await placeMarketOrder(
-        "buy",
-        settings.lotSize,
-        settings.symbol
-      );
-
-      currentPosition = null;
-
-      console.log("SHORT Closed");
+    if (signal === "HOLD") {
+      console.log("No new signal yet. Waiting...");
+      console.log("==============================\n");
+      return;
     }
 
-    console.log("Opening LONG...");
+    if (
+      signal === "BUY" &&
+      lastExecutedSignal !== "BUY" &&
+      currentPosition !== "LONG"
+    ) {
+      isProcessingOrder = true;
 
-    const result = await placeMarketOrder(
-      "buy",
-      settings.lotSize,
-      settings.symbol
-    );
+      try {
+        if (currentPosition === "SHORT") {
+          console.log("Closing SHORT...");
+          await placeMarketOrder("buy", settings.lotSize, settings.symbol);
+          currentPosition = null;
+          console.log("SHORT Closed");
+        }
 
-    currentPosition = "LONG";
+        console.log("Opening LONG on crossover...");
 
-    entryPrice = Number(
-      result.result.average_fill_price
-    );
+        const result = await placeMarketOrder(
+          "buy",
+          settings.lotSize,
+          settings.symbol,
+        );
 
-    const stopPrice =
-      entryPrice - settings.stopLoss;
+        currentPosition = "LONG";
+        lastExecutedSignal = "BUY";
 
-    try {
-      await placeStopLossOrder(
-        "sell",
-        stopPrice,
-        settings.lotSize,
-        settings.symbol
-      );
-
-      console.log(
-        "LONG Stop Loss Created:",
-        stopPrice
-      );
-    } catch (err) {
-      console.log(
-        "LONG SL Creation Failed"
-      );
+        console.log("LONG ENTRY");
+        console.dir(result, { depth: null });
+      } finally {
+        isProcessingOrder = false;
+      }
     }
 
-    trailingStop = stopPrice;
+    // SELL only on a new bearish crossover, once
+    if (
+      signal === "SELL" &&
+      lastExecutedSignal !== "SELL" &&
+      currentPosition !== "SHORT"
+    ) {
+      isProcessingOrder = true;
 
-    console.log("LONG ENTRY:", entryPrice);
-    console.log("LONG TRAIL:", trailingStop);
+      try {
+        if (currentPosition === "LONG") {
+          console.log("Closing LONG...");
+          await placeMarketOrder("sell", settings.lotSize, settings.symbol);
+          currentPosition = null;
+          console.log("LONG Closed");
+        }
 
-  } finally {
-    isProcessingOrder = false;
-  }
-}
-    // =========================
-    // SELL ENTRY
-    // =========================
+        console.log("Opening SHORT on crossover...");
 
-// =========================
-// SELL ENTRY
-// =========================
+        const result = await placeMarketOrder(
+          "sell",
+          settings.lotSize,
+          settings.symbol,
+        );
 
-if (
-  signal === "SELL" &&
-  currentPosition !== "SHORT" &&
-  !isProcessingOrder
-) {
-  isProcessingOrder = true;
+        currentPosition = "SHORT";
+        lastExecutedSignal = "SELL";
 
-  try {
-    // Close LONG first
-    if (currentPosition === "LONG") {
-      console.log("Closing LONG...");
-
-      await placeMarketOrder(
-        "sell",
-        settings.lotSize,
-        settings.symbol
-      );
-
-      currentPosition = null;
-
-      console.log("LONG Closed");
+        console.log("SHORT ENTRY");
+        console.dir(result, { depth: null });
+      } finally {
+        isProcessingOrder = false;
+      }
     }
-
-    console.log("Opening SHORT...");
-
-    const result = await placeMarketOrder(
-      "sell",
-      settings.lotSize,
-      settings.symbol
-    );
-
-    currentPosition = "SHORT";
-
-    entryPrice = Number(
-      result.result.average_fill_price
-    );
-
-    const stopPrice =
-      entryPrice + settings.stopLoss;
-
-    try {
-      await placeStopLossOrder(
-        "buy",
-        stopPrice,
-        settings.lotSize,
-        settings.symbol
-      );
-
-      console.log(
-        "SHORT Stop Loss Created:",
-        stopPrice
-      );
-    } catch (err) {
-      console.log(
-        "SHORT SL Creation Failed"
-      );
-    }
-
-    trailingStop = stopPrice;
-
-    console.log("SHORT ENTRY:", entryPrice);
-    console.log("SHORT TRAIL:", trailingStop);
-
-  } finally {
-    isProcessingOrder = false;
-  }
-}
 
     console.log("==============================\n");
   } catch (err) {
+    isProcessingOrder = false;
+
     console.log("\n========== ERROR ==========");
 
     if (err.response) {
       console.log("Status:", err.response.status);
-
       console.dir(err.response.data, { depth: null });
     } else {
       console.log(err);
@@ -318,65 +199,30 @@ if (
 async function syncPosition() {
   try {
     const response = await getOpenPosition();
+    const settings = await getBotSettings();
 
-   const settings =
-  await getBotSettings();
-
-const position =
-  response.result?.find(
-    p =>
-      p.product_symbol === settings.symbol &&
-      Number(p.size) !== 0
-  );
+    const position = response.result?.find(
+      (p) => p.product_symbol === settings.symbol && Number(p.size) !== 0,
+    );
 
     if (!position) {
-  currentPosition = null;
-  entryPrice = null;
-  trailingStop = null;
+      currentPosition = null;
+      return;
+    }
 
-  return;
-}
+    currentPosition = Number(position.size) > 0 ? "LONG" : "SHORT";
+    lastExecutedSignal = currentPosition === "LONG" ? "BUY" : "SELL";
 
-    currentPosition =
-  Number(position.size) > 0
-    ? "LONG"
-    : "SHORT";
-
-    entryPrice =
-  Number(position.entry_price);
-
-  if (trailingStop === null) {
-  trailingStop =
-    currentPosition === "LONG"
-      ? entryPrice - settings.stopLoss
-      : entryPrice + settings.stopLoss;
-}
-
-console.log(
-  "Synced Position:",
-  currentPosition
-);
-
-console.log(
-  "Entry Price:",
-  entryPrice
-);
-
-console.log(
-  "Trailing Stop:",
-  trailingStop
-);
-
+    console.log("Synced Position:", currentPosition);
   } catch (err) {
-  console.dir(err.response?.data, { depth: null });
-}
+    console.dir(err.response?.data, { depth: null });
+  }
 }
 
 async function start() {
   console.log("🚀 MACD Bhavadip Delta Bot Started");
-  setInterval(async () => {
-  await run();
-}, 10 * 1000);
+
+  setInterval(run, 10 * 1000);
 }
 
 start();

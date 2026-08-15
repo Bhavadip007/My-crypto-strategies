@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { ALLOWED_SYMBOLS } from "../config/symbols.js";
 
 const BotSettingsSchema = new mongoose.Schema({
   botEnabled: {
@@ -8,22 +9,13 @@ const BotSettingsSchema = new mongoose.Schema({
 
   symbol: {
     type: String,
-    default: "ETHUSD"
+    default: "ETHUSD",
+    enum: ALLOWED_SYMBOLS,
   },
 
   lotSize: {
     type: Number,
     default: 10
-  },
-
-  stopLoss: {
-    type: Number,
-    default: 15
-  },
-
-  trailingStop: {
-    type: Number,
-    default: 5
   },
 
   timeframe: {

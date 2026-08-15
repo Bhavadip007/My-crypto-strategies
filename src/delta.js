@@ -43,67 +43,8 @@ export async function placeMarketOrder(side, size, symbol) {
     JSON.parse(body),
     { headers }
   );
-console.dir(res.data, { depth: null });
+  console.dir(res.data, { depth: null });
   return res.data;
-}
-
-export async function placeStopLossOrder(
-  side,
-  stopPrice,
-  size,
-  symbol
-) {
-
-  const path = "/v2/orders";
-
-  const timestamp =
-    Math.floor(Date.now() / 1000).toString();
-
-  const body = JSON.stringify({
-  product_symbol: symbol,
-  size,
-  side: side.toLowerCase(),
-  order_type: "market_order",
-  stop_order_type: "stop_loss_order",
-  stop_price: stopPrice,
-  reduce_only: true
-});
-
-  const signature = sign(
-    "POST",
-    path,
-    timestamp,
-    body
-  );
-
-  const headers = {
-    "api-key": process.env.DELTA_API_KEY,
-    signature,
-    timestamp,
-    "Content-Type": "application/json"
-  };
-
-  try {
-
-    const res = await axios.post(
-      `${BASE_URL}${path}`,
-      JSON.parse(body),
-      { headers }
-    );
-
-    return res.data;
-
-  } catch (err) {
-
-    console.log("STOP LOSS FAILED");
-
-    console.dir(
-      err.response?.data,
-      { depth: null }
-    );
-
-    throw err;
-  }
 }
 
 export async function getOpenPosition() {

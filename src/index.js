@@ -1,7 +1,6 @@
 import axios from "axios";
 import dotenv from "dotenv";
 import express from "express";
-import cors from "cors";
 const app = express();
 
 import { getSignal } from "./strategy.js";
@@ -13,25 +12,50 @@ import { setSignalState } from "./signal-state.js";
 
 dotenv.config();
 
-app.use(
-  cors({
-    origin: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  }),
-);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
+
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Max-Age", "86400");
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
+  next();
+});
 
 app.use(express.json());
 
-app.use("/api/settings", settingsRoutes);
+app.get("/", (req, res) => {
+  res.json({ ok: true, service: "macd-bhavadip-bot" });
+});
 
-await connectDB();
+app.use("/api/settings", settingsRoutes);
 
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`API running on port ${PORT}`);
 });
+
+try {
+  await connectDB();
+} catch (err) {
+  console.error("MongoDB is not connected. Settings save will fail until it connects.");
+  console.error(err);
+}
 
 let currentPosition = null;
 let lastExecutedSignal = null;

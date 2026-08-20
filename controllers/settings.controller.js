@@ -37,7 +37,7 @@ export const updateSettings = async (req, res) => {
   }
 
   settings = await BotSettings.findByIdAndUpdate(settings._id, req.body, {
-    new: true,
+    returnDocument: "after",
     runValidators: true,
   });
 

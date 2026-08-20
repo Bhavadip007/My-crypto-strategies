@@ -13,7 +13,14 @@ import { setSignalState } from "./signal-state.js";
 
 dotenv.config();
 
-app.use(cors());
+app.use(
+  cors({
+    origin: [
+      "https://my-crypto-strategies-fe.vercel.app",
+      "http://localhost:5173",
+    ],
+  }),
+);
 app.use(express.json());
 
 app.get("/", (req, res) => {

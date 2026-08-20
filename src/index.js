@@ -1,6 +1,7 @@
 import axios from "axios";
 import dotenv from "dotenv";
 import express from "express";
+import cors from "cors";
 const app = express();
 
 import { getSignal } from "./strategy.js";
@@ -12,26 +13,7 @@ import { setSignalState } from "./signal-state.js";
 
 dotenv.config();
 
-function setCors(res, req) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    req.headers["access-control-request-headers"] || "Content-Type, Authorization, Accept, Origin, X-Requested-With",
-  );
-  res.setHeader("Access-Control-Max-Age", "86400");
-}
-
-app.use((req, res, next) => {
-  setCors(res, req);
-
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-
-  next();
-});
-
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 app.get("/", (req, res) => {
@@ -39,12 +21,6 @@ app.get("/", (req, res) => {
 });
 
 app.use("/api/settings", settingsRoutes);
-
-app.use((err, req, res, next) => {
-  setCors(res, req);
-  console.error(err);
-  res.status(500).json({ error: err.message || "Server error" });
-});
 
 const PORT = process.env.PORT || 5000;
 

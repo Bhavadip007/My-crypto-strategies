@@ -12,22 +12,18 @@ import { setSignalState } from "./signal-state.js";
 
 dotenv.config();
 
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-
-  if (origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-  } else {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-  }
-
+function setCors(res, req) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS");
   res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+    "Access-Control-Allow-Headers",
+    req.headers["access-control-request-headers"] || "Content-Type, Authorization, Accept, Origin, X-Requested-With",
   );
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Max-Age", "86400");
+}
+
+app.use((req, res, next) => {
+  setCors(res, req);
 
   if (req.method === "OPTIONS") {
     return res.status(204).end();
@@ -44,18 +40,21 @@ app.get("/", (req, res) => {
 
 app.use("/api/settings", settingsRoutes);
 
+app.use((err, req, res, next) => {
+  setCors(res, req);
+  console.error(err);
+  res.status(500).json({ error: err.message || "Server error" });
+});
+
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`API running on port ${PORT}`);
 });
 
-try {
-  await connectDB();
-} catch (err) {
-  console.error("MongoDB is not connected. Settings save will fail until it connects.");
-  console.error(err);
-}
+connectDB().catch((err) => {
+  console.error("MongoDB is not connected yet:", err.message);
+});
 
 let currentPosition = null;
 let lastExecutedSignal = null;

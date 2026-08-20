@@ -13,7 +13,7 @@ import { setSignalState } from "./signal-state.js";
 
 dotenv.config();
 
-app.use(cors({ origin: "*" }));
+app.use(cors());
 app.use(express.json());
 
 app.get("/", (req, res) => {

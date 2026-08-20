@@ -262,8 +262,8 @@ async function run() {
 
 async function syncPosition() {
   try {
-    const response = await getOpenPosition();
     const settings = await getBotSettings();
+    const response = await getOpenPosition(settings.symbol);
 
     const position = response.result?.find(
       (p) => p.product_symbol === settings.symbol && Number(p.size) !== 0,

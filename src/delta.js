@@ -47,7 +47,9 @@ export async function placeMarketOrder(side, size, symbol) {
   return res.data;
 }
 
-export async function getOpenPosition() {
+export async function getOpenPosition(symbol) {
+  const underlying = String(symbol || "").replace(/USDT?$/i, "");
+  const query = `?underlying_asset_symbol=${underlying}`;
   const path = "/v2/positions";
 
   const timestamp = Math.floor(
@@ -56,7 +58,7 @@ export async function getOpenPosition() {
 
   const signature = sign(
     "GET",
-    path,
+    path + query,
     timestamp
   );
 
@@ -67,7 +69,7 @@ export async function getOpenPosition() {
   };
 
   const res = await axios.get(
-    `${BASE_URL}${path}`,
+    `${BASE_URL}${path}${query}`,
     { headers }
   );
 

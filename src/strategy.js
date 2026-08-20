@@ -1,51 +1,39 @@
 import { zlema } from "./indicators.js";
 
-let isReady = false;
-let lastRawSignal = null;
+const FAST = 14;
+const SLOW = 26;
+const TRIGGER = 9;
 
-export function resetSignalState() {
-  isReady = false;
-  lastRawSignal = null;
+export function computeMacd(closes) {
+  const ma12 = zlema(closes, FAST);
+  const ma26 = zlema(closes, SLOW);
+  const macd = ma12.map((value, i) => value - ma26[i]);
+  const signalLine = zlema(macd, TRIGGER);
+  const hist = macd.map((value, i) => value - signalLine[i]);
+
+  return { ma12, ma26, macd, signalLine, hist };
 }
 
-export function getSignal(closes) {
-  const fast = zlema(closes, 14);
-  const slow = zlema(closes, 26);
-
-  const macd = fast.map((v, i) => v - slow[i]);
-
-  const signalLine = zlema(macd, 9);
-
-  const hist = macd.map((v, i) => v - signalLine[i]);
-
+// Matches Pine:
+// buySignal  = ta.crossover(hist, 0)
+// sellSignal = ta.crossunder(hist, 0)
+// Alerts fire once per bar close, so pass CLOSED candle closes only.
+export function getSignal(closedCloses) {
+  const { hist } = computeMacd(closedCloses);
   const prev = hist[hist.length - 2];
   const curr = hist[hist.length - 1];
 
-  if (prev == null || curr == null) {
-    return "HOLD";
+  if (!Number.isFinite(prev) || !Number.isFinite(curr)) {
+    return { signal: "HOLD", histPrev: prev, histCurr: curr };
   }
 
-  let raw = "HOLD";
-
-  if (prev < 0 && curr > 0) {
-    raw = "BUY";
-  } else if (prev > 0 && curr < 0) {
-    raw = "SELL";
+  if (prev <= 0 && curr > 0) {
+    return { signal: "BUY", histPrev: prev, histCurr: curr };
   }
 
-  // First check after bot start: remember current state, do not trade
-  if (!isReady) {
-    isReady = true;
-    lastRawSignal = raw;
-    return "HOLD";
+  if (prev >= 0 && curr < 0) {
+    return { signal: "SELL", histPrev: prev, histCurr: curr };
   }
 
-  // Order only when a NEW signal appears, not while it stays the same
-  if (raw !== "HOLD" && raw !== lastRawSignal) {
-    lastRawSignal = raw;
-    return raw;
-  }
-
-  lastRawSignal = raw;
-  return "HOLD";
+  return { signal: "HOLD", histPrev: prev, histCurr: curr };
 }

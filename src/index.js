@@ -4,11 +4,12 @@ import express from "express";
 import cors from "cors";
 const app = express();
 
-import { getSignal, resetSignalState } from "./strategy.js";
+import { getSignal } from "./strategy.js";
 import { placeMarketOrder, getOpenPosition } from "./delta.js";
 import settingsRoutes from "../routes/settings.routes.js";
 import { getBotSettings } from "../services/settings.service.js";
 import { connectDB } from "../config/db.js";
+import { setSignalState } from "./signal-state.js";
 
 dotenv.config();
 
@@ -26,6 +27,7 @@ app.listen(5000, () => {
 
 let currentPosition = null;
 let lastExecutedSignal = null;
+let lastClosedCandleTime = null;
 let isProcessingOrder = false;
 let activeSymbol = null;
 
@@ -39,8 +41,9 @@ async function getCandles(symbol, timeframe) {
     "4h": 14400,
   };
 
+  const seconds = timeframeMap[timeframe];
   const end = Math.floor(Date.now() / 1000);
-  const start = end - 200 * timeframeMap[timeframe];
+  const start = end - 500 * seconds;
 
   const response = await axios.get(
     "https://api.india.delta.exchange/v2/history/candles",
@@ -61,6 +64,70 @@ async function getCandles(symbol, timeframe) {
   return candles;
 }
 
+async function executeSignal(signal, settings) {
+  if (signal === "BUY" && currentPosition !== "LONG") {
+    isProcessingOrder = true;
+
+    try {
+      if (currentPosition === "SHORT") {
+        console.log("Closing SHORT...");
+        await placeMarketOrder("buy", settings.lotSize, settings.symbol);
+        currentPosition = null;
+        console.log("SHORT Closed");
+      }
+
+      console.log("Opening LONG on hist crossover...");
+
+      const result = await placeMarketOrder(
+        "buy",
+        settings.lotSize,
+        settings.symbol,
+      );
+
+      currentPosition = "LONG";
+      lastExecutedSignal = "BUY";
+
+      console.log("LONG ENTRY");
+      console.dir(result, { depth: null });
+      return true;
+    } finally {
+      isProcessingOrder = false;
+    }
+  }
+
+  if (signal === "SELL" && currentPosition !== "SHORT") {
+    isProcessingOrder = true;
+
+    try {
+      if (currentPosition === "LONG") {
+        console.log("Closing LONG...");
+        await placeMarketOrder("sell", settings.lotSize, settings.symbol);
+        currentPosition = null;
+        console.log("LONG Closed");
+      }
+
+      console.log("Opening SHORT on hist crossover...");
+
+      const result = await placeMarketOrder(
+        "sell",
+        settings.lotSize,
+        settings.symbol,
+      );
+
+      currentPosition = "SHORT";
+      lastExecutedSignal = "SELL";
+
+      console.log("SHORT ENTRY");
+      console.dir(result, { depth: null });
+      return true;
+    } finally {
+      isProcessingOrder = false;
+    }
+  }
+
+  return false;
+}
+
 async function run() {
   try {
     await syncPosition();
@@ -68,6 +135,7 @@ async function run() {
     const settings = await getBotSettings();
 
     if (!settings.botEnabled) {
+      setSignalState({ waitingFor: "bot enable", position: currentPosition });
       console.log("Bot Disabled");
       return;
     }
@@ -79,10 +147,10 @@ async function run() {
 
     if (activeSymbol !== settings.symbol) {
       console.log(
-        `Currency changed to ${settings.symbol}. New orders will use this pair from now.`,
+        `Currency changed to ${settings.symbol}. Waiting for next candle close.`,
       );
-      resetSignalState();
       lastExecutedSignal = null;
+      lastClosedCandleTime = null;
       currentPosition = null;
       activeSymbol = settings.symbol;
       await syncPosition();
@@ -90,93 +158,77 @@ async function run() {
 
     const candles = await getCandles(settings.symbol, settings.timeframe);
 
-    if (!candles.length) {
-      console.log("No candles received");
+    if (candles.length < 50) {
+      console.log("Not enough candles received");
       return;
     }
 
-    const closes = candles.map((candle) => Number(candle.close));
-    const signal = getSignal(closes);
+    // Ignore the forming candle. Pine alerts fire once per bar close.
+    const closedCandles = candles.slice(0, -1);
+    const latestClosed = closedCandles[closedCandles.length - 1];
+    const closedCloses = closedCandles.map((candle) => Number(candle.close));
+    const { signal, histPrev, histCurr } = getSignal(closedCloses);
+
+    setSignalState({
+      signal,
+      histPrev,
+      histCurr,
+      candleTime: latestClosed.time,
+      symbol: settings.symbol,
+      timeframe: settings.timeframe,
+      position: currentPosition,
+      waitingFor:
+        lastClosedCandleTime === latestClosed.time
+          ? "next candle close"
+          : "signal check",
+    });
 
     console.log("\n==============================");
     console.log("Time:", new Date().toISOString());
     console.log("Symbol:", settings.symbol);
-    console.log("Latest Close:", closes[closes.length - 1]);
+    console.log(
+      "Closed candle:",
+      new Date(latestClosed.time * 1000).toISOString(),
+    );
+    console.log("Closed close:", closedCloses[closedCloses.length - 1]);
+    console.log("Hist prev:", histPrev);
+    console.log("Hist curr:", histCurr);
     console.log("Signal:", signal);
     console.log("Current Position:", currentPosition);
-    console.log("Last Executed Signal:", lastExecutedSignal);
 
-    if (signal === "HOLD") {
-      console.log("No new signal yet. Waiting...");
+    if (lastClosedCandleTime === null) {
+      lastClosedCandleTime = latestClosed.time;
+      console.log("Armed on current closed candle. Waiting for next close...");
       console.log("==============================\n");
       return;
     }
 
-    if (
-      signal === "BUY" &&
-      lastExecutedSignal !== "BUY" &&
-      currentPosition !== "LONG"
-    ) {
-      isProcessingOrder = true;
-
-      try {
-        if (currentPosition === "SHORT") {
-          console.log("Closing SHORT...");
-          await placeMarketOrder("buy", settings.lotSize, settings.symbol);
-          currentPosition = null;
-          console.log("SHORT Closed");
-        }
-
-        console.log("Opening LONG on crossover...");
-
-        const result = await placeMarketOrder(
-          "buy",
-          settings.lotSize,
-          settings.symbol,
-        );
-
-        currentPosition = "LONG";
-        lastExecutedSignal = "BUY";
-
-        console.log("LONG ENTRY");
-        console.dir(result, { depth: null });
-      } finally {
-        isProcessingOrder = false;
-      }
+    if (latestClosed.time === lastClosedCandleTime) {
+      console.log("Waiting for candle close...");
+      console.log("==============================\n");
+      return;
     }
 
-    // SELL only on a new bearish crossover, once
-    if (
-      signal === "SELL" &&
-      lastExecutedSignal !== "SELL" &&
-      currentPosition !== "SHORT"
-    ) {
-      isProcessingOrder = true;
+    if (signal === "HOLD") {
+      lastClosedCandleTime = latestClosed.time;
+      console.log("Candle closed. No crossover.");
+      console.log("==============================\n");
+      return;
+    }
 
-      try {
-        if (currentPosition === "LONG") {
-          console.log("Closing LONG...");
-          await placeMarketOrder("sell", settings.lotSize, settings.symbol);
-          currentPosition = null;
-          console.log("LONG Closed");
-        }
+    if (lastExecutedSignal === signal) {
+      lastClosedCandleTime = latestClosed.time;
+      console.log("Same side as current trade. Skip.");
+      console.log("==============================\n");
+      return;
+    }
 
-        console.log("Opening SHORT on crossover...");
+    const placed = await executeSignal(signal, settings);
 
-        const result = await placeMarketOrder(
-          "sell",
-          settings.lotSize,
-          settings.symbol,
-        );
-
-        currentPosition = "SHORT";
-        lastExecutedSignal = "SELL";
-
-        console.log("SHORT ENTRY");
-        console.dir(result, { depth: null });
-      } finally {
-        isProcessingOrder = false;
-      }
+    if (placed) {
+      lastClosedCandleTime = latestClosed.time;
+    } else {
+      lastClosedCandleTime = latestClosed.time;
     }
 
     console.log("==============================\n");
@@ -221,7 +273,6 @@ async function syncPosition() {
 
 async function start() {
   console.log("🚀 MACD Bhavadip Delta Bot Started");
-
   setInterval(run, 10 * 1000);
 }
 

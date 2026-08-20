@@ -1,8 +1,13 @@
 import BotSettings from "../models/BotSettings.js";
 import { ALLOWED_SYMBOLS, isAllowedSymbol } from "../config/symbols.js";
+import { signalState } from "../src/signal-state.js";
 
 export const getSymbols = (req, res) => {
   res.json({ symbols: ALLOWED_SYMBOLS });
+};
+
+export const getSignalStatus = (req, res) => {
+  res.json(signalState);
 };
 
 export const getSettings = async (req, res) => {

@@ -81,14 +81,11 @@ async function executeSignal(signal, settings) {
     isProcessingOrder = true;
 
     try {
-      // Opposite signal only exits. Wait for a later signal to enter.
       if (currentPosition === "SHORT") {
         console.log("Closing SHORT...");
         await placeMarketOrder("buy", settings.lotSize, settings.symbol);
         currentPosition = null;
-        lastExecutedSignal = "BUY";
-        console.log("SHORT Closed. Waiting for next signal before new entry.");
-        return true;
+        console.log("SHORT Closed");
       }
 
       console.log("Opening LONG on hist crossover...");
@@ -114,14 +111,11 @@ async function executeSignal(signal, settings) {
     isProcessingOrder = true;
 
     try {
-      // Opposite signal only exits. Wait for a later signal to enter.
       if (currentPosition === "LONG") {
         console.log("Closing LONG...");
         await placeMarketOrder("sell", settings.lotSize, settings.symbol);
         currentPosition = null;
-        lastExecutedSignal = "SELL";
-        console.log("LONG Closed. Waiting for next signal before new entry.");
-        return true;
+        console.log("LONG Closed");
       }
 
       console.log("Opening SHORT on hist crossover...");

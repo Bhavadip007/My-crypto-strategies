@@ -39,7 +39,7 @@ connectDB().catch((err) => {
 
 let currentPosition = null;
 let lastExecutedSignal = null;
-let lastClosedCandleTime = null;
+let isArmed = false;
 let isProcessingOrder = false;
 let activeSymbol = null;
 
@@ -81,11 +81,14 @@ async function executeSignal(signal, settings) {
     isProcessingOrder = true;
 
     try {
+      // Opposite signal only exits. Wait for a later signal to enter.
       if (currentPosition === "SHORT") {
         console.log("Closing SHORT...");
         await placeMarketOrder("buy", settings.lotSize, settings.symbol);
         currentPosition = null;
-        console.log("SHORT Closed");
+        lastExecutedSignal = "BUY";
+        console.log("SHORT Closed. Waiting for next signal before new entry.");
+        return true;
       }
 
       console.log("Opening LONG on hist crossover...");
@@ -111,11 +114,14 @@ async function executeSignal(signal, settings) {
     isProcessingOrder = true;
 
     try {
+      // Opposite signal only exits. Wait for a later signal to enter.
       if (currentPosition === "LONG") {
         console.log("Closing LONG...");
         await placeMarketOrder("sell", settings.lotSize, settings.symbol);
         currentPosition = null;
-        console.log("LONG Closed");
+        lastExecutedSignal = "SELL";
+        console.log("LONG Closed. Waiting for next signal before new entry.");
+        return true;
       }
 
       console.log("Opening SHORT on hist crossover...");
@@ -159,10 +165,10 @@ async function run() {
 
     if (activeSymbol !== settings.symbol) {
       console.log(
-        `Currency changed to ${settings.symbol}. Waiting for next candle close.`,
+        `Currency changed to ${settings.symbol}. Waiting for next MACD signal.`,
       );
       lastExecutedSignal = null;
-      lastClosedCandleTime = null;
+      isArmed = false;
       currentPosition = null;
       activeSymbol = settings.symbol;
       await syncPosition();
@@ -175,23 +181,23 @@ async function run() {
       return;
     }
 
-    // Ignore the forming candle. Pine alerts fire once per bar close.
-    const closedCandles = candles.slice(0, -1);
-    const latestClosed = closedCandles[closedCandles.length - 1];
-    const closedCloses = closedCandles.map((candle) => Number(candle.close));
-    const { signal, histPrev, histCurr } = getSignal(closedCloses);
+    // Include forming candle so we match live MACD arrows (not bar-close only).
+    const liveCandle = candles[candles.length - 1];
+    const closes = candles.map((candle) => Number(candle.close));
+    const { signal, histPrev, histCurr } = getSignal(closes);
 
     setSignalState({
       signal,
       histPrev,
       histCurr,
-      candleTime: latestClosed.time,
+      candleTime: liveCandle.time,
       symbol: settings.symbol,
       timeframe: settings.timeframe,
       position: currentPosition,
-      waitingFor:
-        lastClosedCandleTime === latestClosed.time
-          ? "next candle close"
+      waitingFor: !isArmed
+        ? "arm live signals"
+        : signal === "HOLD"
+          ? "macd arrow"
           : "signal check",
     });
 
@@ -199,49 +205,39 @@ async function run() {
     console.log("Time:", new Date().toISOString());
     console.log("Symbol:", settings.symbol);
     console.log(
-      "Closed candle:",
-      new Date(latestClosed.time * 1000).toISOString(),
+      "Live candle:",
+      new Date(liveCandle.time * 1000).toISOString(),
     );
-    console.log("Closed close:", closedCloses[closedCloses.length - 1]);
+    console.log("Live close:", closes[closes.length - 1]);
     console.log("Hist prev:", histPrev);
     console.log("Hist curr:", histCurr);
     console.log("Signal:", signal);
     console.log("Current Position:", currentPosition);
 
-    if (lastClosedCandleTime === null) {
-      lastClosedCandleTime = latestClosed.time;
-      console.log("Armed on current closed candle. Waiting for next close...");
-      console.log("==============================\n");
-      return;
-    }
-
-    if (latestClosed.time === lastClosedCandleTime) {
-      console.log("Waiting for candle close...");
+    // First poll only observes — do not chase an arrow already on the chart.
+    if (!isArmed) {
+      if (signal === "BUY" || signal === "SELL") {
+        lastExecutedSignal = lastExecutedSignal || signal;
+      }
+      isArmed = true;
+      console.log("Live signal mode armed. Waiting for next MACD arrow...");
       console.log("==============================\n");
       return;
     }
 
     if (signal === "HOLD") {
-      lastClosedCandleTime = latestClosed.time;
-      console.log("Candle closed. No crossover.");
+      console.log("No live crossover yet.");
       console.log("==============================\n");
       return;
     }
 
     if (lastExecutedSignal === signal) {
-      lastClosedCandleTime = latestClosed.time;
-      console.log("Same side as current trade. Skip.");
+      console.log("Same side as last action. Skip.");
       console.log("==============================\n");
       return;
     }
 
-    const placed = await executeSignal(signal, settings);
-
-    if (placed) {
-      lastClosedCandleTime = latestClosed.time;
-    } else {
-      lastClosedCandleTime = latestClosed.time;
-    }
+    await executeSignal(signal, settings);
 
     console.log("==============================\n");
   } catch (err) {
@@ -284,8 +280,8 @@ async function syncPosition() {
 }
 
 async function start() {
-  console.log("🚀 MACD Bhavadip Delta Bot Started");
-  setInterval(run, 10 * 1000);
+  console.log("🚀 MACD Bhavadip Delta Bot Started (live MACD arrows)");
+  setInterval(run, 3 * 1000);
 }
 
 start();

@@ -17,9 +17,9 @@ export function computeMacd(closes) {
 // Matches Pine:
 // buySignal  = ta.crossover(hist, 0)
 // sellSignal = ta.crossunder(hist, 0)
-// Alerts fire once per bar close, so pass CLOSED candle closes only.
-export function getSignal(closedCloses) {
-  const { hist } = computeMacd(closedCloses);
+// Pass closes including the forming candle to match live up/down arrows.
+export function getSignal(closes) {
+  const { hist } = computeMacd(closes);
   const prev = hist[hist.length - 2];
   const curr = hist[hist.length - 1];
 
